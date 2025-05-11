@@ -27,11 +27,9 @@
             <label for="categoria">Categoria do Chamado</label>
             <select class="form-control" id="categoria" name="categoria" required>
               <option value="">Selecione uma categoria</option>
-              <option value="bug">Bug/Erro no Sistema</option>
-              <option value="duvida">Dúvida/Consulta</option>
-              <option value="sugestao">Sugestão de Melhoria</option>
-              <option value="configuracao">Configuração/Setup</option>
-              <option value="treinamento">Solicitação de Treinamento</option>
+              <option value="bug">Bug/Erro</option>
+              <option value="duvida">Dúvida</option>
+              <option value="sugestao">Sugestão</option>
               <option value="outro">Outro</option>
             </select>
           </div>
@@ -145,5 +143,28 @@ document.addEventListener('DOMContentLoaded', function () {
             btn.innerHTML = 'Enviar';
         });
     });
+
+    // Inicializa os contadores ao abrir o modal
+    contarCaracteres(document.getElementById('assunto'), 200, 'contadorAssunto');
+    contarCaracteres(document.getElementById('mensagem'), 2000, 'contadorMensagem');
+    // Atualiza ao mostrar o modal (caso o usuário abra várias vezes)
+    $('#modal-suporte').on('shown.bs.modal', function () {
+        contarCaracteres(document.getElementById('assunto'), 200, 'contadorAssunto');
+        contarCaracteres(document.getElementById('mensagem'), 2000, 'contadorMensagem');
+    });
 });
+
+// Função para contador regressivo de caracteres
+function contarCaracteres(elemento, max, idContador) {
+    const restante = max - elemento.value.length;
+    const contador = document.getElementById(idContador);
+    contador.textContent = restante + ' caracteres restantes';
+    if (restante <= 20) {
+        contador.classList.remove('text-success');
+        contador.classList.add('text-danger');
+    } else {
+        contador.classList.remove('text-danger');
+        contador.classList.add('text-success');
+    }
+}
 </script>
