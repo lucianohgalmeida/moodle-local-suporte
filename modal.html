@@ -66,6 +66,20 @@
 
 //validação do tamanho do texto
 <script>
+// Função para contador regressivo de caracteres
+function contarCaracteres(elemento, max, idContador) {
+    const restante = max - elemento.value.length;
+    const contador = document.getElementById(idContador);
+    contador.textContent = restante + ' caracteres restantes';
+    if (restante <= 20) {
+        contador.classList.remove('text-success');
+        contador.classList.add('text-danger');
+    } else {
+        contador.classList.remove('text-danger');
+        contador.classList.add('text-success');
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('form-suporte');
     const btn = document.getElementById('btnEnviarSuporte');
@@ -148,23 +162,11 @@ document.addEventListener('DOMContentLoaded', function () {
     contarCaracteres(document.getElementById('assunto'), 200, 'contadorAssunto');
     contarCaracteres(document.getElementById('mensagem'), 2000, 'contadorMensagem');
     // Atualiza ao mostrar o modal (caso o usuário abra várias vezes)
-    $('#modal-suporte').on('shown.bs.modal', function () {
-        contarCaracteres(document.getElementById('assunto'), 200, 'contadorAssunto');
-        contarCaracteres(document.getElementById('mensagem'), 2000, 'contadorMensagem');
-    });
-});
-
-// Função para contador regressivo de caracteres
-function contarCaracteres(elemento, max, idContador) {
-    const restante = max - elemento.value.length;
-    const contador = document.getElementById(idContador);
-    contador.textContent = restante + ' caracteres restantes';
-    if (restante <= 20) {
-        contador.classList.remove('text-success');
-        contador.classList.add('text-danger');
-    } else {
-        contador.classList.remove('text-danger');
-        contador.classList.add('text-success');
+    if (window.jQuery) {
+        $('#modal-suporte').on('shown.bs.modal', function () {
+            contarCaracteres(document.getElementById('assunto'), 200, 'contadorAssunto');
+            contarCaracteres(document.getElementById('mensagem'), 2000, 'contadorMensagem');
+        });
     }
-}
+});
 </script>
