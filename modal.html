@@ -1,0 +1,149 @@
+<div class="modal fade" id="modal-suporte" tabindex="-1" aria-labelledby="modalSuporteLabel" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content shadow">
+      <div class="modal-header bg-primary text-white d-flex justify-content-between align-items-center">
+        <div class="d-flex align-items-center">
+          <img src="https://dtcom.com.br/wp-content/webp-express/webp-images/uploads/2024/08/logotipo_DTCOM_topo_transparent_nova-1-180x45.png.webp"
+               alt="Logo DTCom"
+               style="height: 35px; margin-right: 10px;">
+          <h5 class="modal-title mb-0" id="modalSuporteLabel">Contato com Suporte Técnico</h5>
+        </div>
+        <button type="button" class="close text-white" data-dismiss="modal" aria-label="Fechar">
+          <span aria-hidden="true">&times;</span>
+        </button>
+      </div>
+
+      <form id="form-suporte" enctype="multipart/form-data">
+        <div class="modal-body">
+          <div class="form-group">
+            <label>Solicitante</label>
+            <p class="form-control-plaintext" id="nomeSolicitante">(carregando...)</p>
+          </div>
+          <div class="form-group">
+            <label>E-mail</label>
+            <p class="form-control-plaintext" id="emailSolicitante">(carregando...)</p>
+          </div>
+          <div class="form-group">
+            <label for="categoria">Categoria do Chamado</label>
+            <select class="form-control" id="categoria" name="categoria" required>
+              <option value="">Selecione uma categoria</option>
+              <option value="bug">Bug/Erro no Sistema</option>
+              <option value="duvida">Dúvida/Consulta</option>
+              <option value="sugestao">Sugestão de Melhoria</option>
+              <option value="configuracao">Configuração/Setup</option>
+              <option value="treinamento">Solicitação de Treinamento</option>
+              <option value="outro">Outro</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label for="assunto">Assunto</label>
+            <input type="text" class="form-control" id="assunto" name="assunto"
+         maxlength="200"
+         pattern=".{10,}" title="O assunto deve ter pelo menos 10 caracteres."
+         oninput="contarCaracteres(this, 200, 'contadorAssunto')" required>
+            <div id="contadorAssunto" class="form-text fw-bold text-success">200 caracteres restantes</div>
+          </div>
+          <div class="form-group">
+            <label for="mensagem">Mensagem</label>
+            <textarea class="form-control" id="mensagem" name="mensagem" rows="4"
+          maxlength="2000"
+          title="A mensagem deve ter pelo menos 30 caracteres."
+          oninput="contarCaracteres(this, 2000, 'contadorMensagem')" required></textarea>
+            <div id="contadorMensagem" class="form-text fw-bold text-success">2000 caracteres restantes</div>
+          </div>
+          <div class="form-group">
+            <label for="anexo">Anexo (opcional até 5MB)</label>
+            <input type="file" class="form-control" id="anexo" name="anexo">
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="submit" id="btnEnviarSuporte" class="btn btn-success">Enviar</button>
+          <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancelar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+//validação do tamanho do texto
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+    const form = document.getElementById('form-suporte');
+    const btn = document.getElementById('btnEnviarSuporte');
+    let enviando = false; // flag para impedir múltiplos envios
+
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+
+        if (enviando) return; // já está enviando? então bloqueia
+
+        const assuntoCampo = document.getElementById('assunto');
+        const mensagemCampo = document.getElementById('mensagem');
+        const anexoCampo = document.getElementById('anexo');
+        const categoriaCampo = document.getElementById('categoria');
+
+        const assunto = assuntoCampo.value.trim();
+        const mensagem = mensagemCampo.value.trim();
+        const categoria = categoriaCampo.value.trim();
+
+        // ✅ Validação robusta
+        if (categoria === '') {
+            alert('Por favor, selecione uma categoria para o chamado.');
+            categoriaCampo.focus();
+            return;
+        }
+
+        if (assunto.length < 10) {
+            alert('O campo "Assunto" deve ter pelo menos 10 caracteres.');
+            assuntoCampo.focus();
+            return;
+        }
+
+        if (mensagem.length < 30) {
+            alert('O campo "Mensagem" deve ter pelo menos 30 caracteres.');
+            mensagemCampo.focus();
+            return;
+        }
+
+        if (anexoCampo.files.length > 0 && anexoCampo.files[0].size > 5 * 1024 * 1024) {
+            alert('O anexo não pode ultrapassar 5MB.');
+            anexoCampo.focus();
+            return;
+        }
+
+        // 🚫 Bloqueia novos envios imediatamente
+        enviando = true;
+        btn.disabled = true;
+        btn.innerHTML = 'Enviando...';
+
+        const formData = new FormData(form);
+
+        fetch('ajax.php', {
+            method: 'POST',
+            body: formData
+        })
+        .then(res => res.json())
+        .then(data => {
+            if (data.success) {
+                alert('Chamado enviado com sucesso!');
+                form.reset();
+                contarCaracteres(document.getElementById('assunto'), 200, 'contadorAssunto');
+                contarCaracteres(document.getElementById('mensagem'), 2000, 'contadorMensagem');
+                $('#modal-suporte').modal('hide');
+            } else {
+                alert('Erro: ' + (data.error || 'Não foi possível enviar o chamado.'));
+            }
+        })
+        .catch(() => {
+            alert('Erro de conexão. Tente novamente.');
+        })
+        .finally(() => {
+            // 🔓 Reativa botão após resposta
+            enviando = false;
+            btn.disabled = false;
+            btn.innerHTML = 'Enviar';
+        });
+    });
+});
+</script>
