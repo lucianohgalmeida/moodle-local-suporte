@@ -1,0 +1,61 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+Always respond in Portuguese
+
+Você está desenvolvendo um plugin para Moodle e deve seguir rigorosamente os padrões da documentação oficial de desenvolvimento de plugins do Moodle. Mantenha a estrutura de diretórios intacta, com arquivos como version.php, lib.php, db/access.php, db/install.php, settings.php, lang/, classes/, templates/, entre outros.
+
+Preserve sempre o contexto completo dos arquivos: antes de modificar qualquer função, leia todo o arquivo e identifique se a função é usada em outros pontos. Nunca remova, sobrescreva ou duplique uma função sem verificar suas dependências internas e externas. Toda alteração deve manter as funcionalidades existentes funcionando corretamente.
+
+Evite criar novas funções se já existir uma que atenda ao propósito. Reaproveite a lógica existente e evite duplicações. Nunca reestruture o plugin automaticamente ou crie pastas adicionais sem justificativa.
+
+Use exclusivamente as APIs nativas do Moodle, como $DB->get_record, context_*::instance, require_login, enrol_manual_enrol_users, core_user::get_user, entre outras. Evite consultas SQL manuais, a menos que não haja API para o caso. Nunca utilize mysqli, PDO, ou frameworks externos.
+
+O código deve estar em inglês (nomes de variáveis, funções, classes), mas os comentários podem estar em português. Siga a convenção PSR-12 para padronização. Use mustache para interface, classes PHP para lógica, e form.php para formulários. Nunca misture lógica de negócio com HTML.
+
+Inclua sempre as verificações de segurança como require_login, require_sesskey e verificações de capability conforme o contexto. Nunca remova callbacks, eventos ou ganchos (hooks) registrados sem validação prévia.
+
+A IA deve evitar alterações destrutivas e sempre validar se uma função removida não está sendo usada. Nunca altere a estrutura de arquivos do plugin sem necessidade clara. Nunca gere arquivos típicos de frameworks externos como routes.php, index.html ou app.js.
+
+Todas as respostas devem ser em português e seguir as regras acima em todos os momentos.
+
+
+REGRAS PARA MENSAGENS DE COMMIT (PADRÃO CONVENTIONAL COMMITS)
+
+Estrutura da mensagem de commit:
+<tipo>(escopo opcional): descrição breve
+
+TIPOS MAIS USADOS:
+feat       → Nova funcionalidade
+fix        → Correção de bug
+refactor   → Refatoração (sem mudança de comportamento)
+style      → Formatação, identação, nomes, etc (sem mudança de lógica)
+docs       → Atualizações de documentação
+test       → Adição ou modificação de testes
+chore      → Tarefas técnicas e de manutenção
+perf       → Melhorias de performance
+i18n       → Alterações em internacionalização/idiomas
+
+EXEMPLOS:
+feat(inscrição): adicionar lógica para autoinscrição via API
+fix(lib.php): corrigir verificação de capability em envio de dados
+docs(readme): incluir instruções de instalação do plugin
+style(ajax): padronizar indentação e nomes de variáveis
+refactor(userfetch): extrair função para consultar perfil customizado
+chore: remover arquivos de testes antigos
+
+REGRAS GERAIS:
+1. Escreva no imperativo: "corrigir", "adicionar", "remover"
+2. Use o escopo (entre parênteses) apenas se necessário
+3. Evite mensagens genéricas como: ajustes, atualizações, mudanças
+4. Commits pequenos e objetivos – preferir granularidade
+5. Limite de 72 caracteres na primeira linha
+6. Use um corpo de commit após uma linha em branco se quiser detalhar
+
+EXEMPLO COM CORPO:
+fix(api): tratar erro 401 ao inscrever aluno
+
+Adicionado verificação de token inválido e fallback para novo login.
+
