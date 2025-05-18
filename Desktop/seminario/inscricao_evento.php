@@ -195,6 +195,7 @@ try {
                             }
                             
                             error_log("Seminário {$curso_id} ({$curso_local['nome']}): Total inscritos = $total_inscritos_local, Limite = $total_vagas, Vagas disponíveis = $vagas_disponiveis");
+                            error_log("Seminário {$curso_id} ({$curso_local['nome']}): Inscrição aberta = " . (($vagas_disponiveis > 0 || $vagas_disponiveis < 0) ? 'SIM' : 'NÃO'));
                             
                             // Se não há mais vagas e não foi solicitado para forçar abertura
                             if ($vagas_disponiveis <= 0 && !$force_open) {
@@ -334,975 +335,361 @@ try {
                 $ids_moodle[] = $id; // IDs do Moodle permanecem como estão
             }
         }
-        
-        // Buscar informações de seminários do Moodle
-        if (!empty($ids_moodle)) {
-            // Preparar query string com IDs
-            $ids_string = implode(',', $ids_moodle);
-            
-            $api_params = [
-                'field' => 'ids',
-                'value' => $ids_string
-            ];
-            
-            $course_response = call_moodle_api('core_course_get_courses_by_field', $api_params);
-            
-            if (!isset($course_response['exception']) && !isset($course_response['error']) && 
-                isset($course_response['courses']) && !empty($course_response['courses'])) {
-                
-                foreach ($course_response['courses'] as $curso) {
-                    $agora = time();
-                    
-                    // Verificar visibilidade e período
-                    $curso_visivel = ($curso['visible'] ?? 0) == 1;
-                    $dentro_periodo = 
-                        (!isset($curso['enddate']) || $curso['enddate'] == 0 || $curso['enddate'] > $agora) && 
-                        (!isset($curso['startdate']) || $curso['startdate'] == 0 || $curso['startdate'] <= $agora);
-                    
-                    if ($curso_visivel) {
-                        // Buscar métodos de inscrição e vagas disponíveis
-                        $enrol_methods = call_moodle_api('core_enrol_get_course_enrolment_methods', [
-                            'courseid' => $curso['id']
-                        ]);
-                        
-                        // Verificar método de autoinscrição e disponibilidade
-                        $tem_autoinscrição = false;
-                        $vagas_disponiveis = 0;
-                        $total_vagas = 0;
-                        $inscrição_aberta = false;
-                        $mensagem_boasvindas_curso = '';
-                        $data_inicio_inscricao = 0;
-                        $data_fim_inscricao = 0;
-                        
-                        foreach ($enrol_methods as $method) {
-                            if ($method['type'] === 'self') {
-                                $tem_autoinscrição = true;
-                                
-                                // Obter configurações da autoinscrição
-                                $enrol_config = call_moodle_api('core_enrol_get_instance_info', [
-                                    'instanceid' => $method['id']
-                                ]);
-                                
-                                if (!isset($enrol_config['exception']) && !isset($enrol_config['error'])) {
-                                    // Verificar status (ativo/desativado)
-                                    $inscrição_aberta = ($enrol_config['status'] ?? 0) == 0; // 0 = ativo
-                                    
-                                    // Verificar datas de início e fim da inscrição
-                                    $data_inicio_inscricao = $enrol_config['enrolstartdate'] ?? 0;
-                                    $data_fim_inscricao = $enrol_config['enrolenddate'] ?? 0;
-                                    
-                                    if ($data_inicio_inscricao > 0 && $data_inicio_inscricao > $agora) {
-                                        $inscrição_aberta = false; // Inscrição ainda não começou
-                                    }
-                                    
-                                    if ($data_fim_inscricao > 0 && $data_fim_inscricao < $agora) {
-                                        $inscrição_aberta = false; // Inscrição já terminou
-                                    }
-                                    
-                                    // Verificar limite de inscrições
-                                    $limite_inscricoes = $enrol_config['customint3'] ?? 0; // 0 = sem limite
-                                    $status_inscrição = $enrol_config['status'] ?? 0; // 0 = ativo, 1 = desabilitado
-                                    
-                                    error_log("Curso {$curso['id']} ({$curso['fullname']}): limite_inscricoes=$limite_inscricoes, status_inscrição=$status_inscrição");
-                                    
-                                    if ($limite_inscricoes > 0) {
-                                        // Buscar número atual de inscritos - usando método alternativo
-                                        try {
-                                            // Método 1: Contar participantes através da API separada
-                                            $count_params = [
-                                                'courseid' => $curso['id'],
-                                                'withcapability' => '',  // Deixe vazio para contar todos os inscritos
-                                                'search' => '',
-                                                'sort' => 'lastname',
-                                                'limitfrom' => 0,
-                                                'limitnumber' => 0 // 0 para listar todos
-                                            ];
-                                            
-                                            $count_response = call_moodle_api('core_enrol_get_enrolled_users_with_capability', [
-                                                'coursecapabilities' => [$count_params]
-                                            ]);
-                                            
-                                            if (!isset($count_response['exception']) && 
-                                                !isset($count_response['error']) && 
-                                                is_array($count_response) && 
-                                                isset($count_response[0]['users'])) {
-                                                
-                                                $total_inscritos = count($count_response[0]['users']);
-                                                error_log("Curso {$curso['id']} ({$curso['fullname']}): método 1 - Total inscritos = $total_inscritos, Limite = $limite_inscricoes");
-                                            } else {
-                                                // Se houve erro, tentar outro método
-                                                error_log("Curso {$curso['id']} ({$curso['fullname']}): falha no método 1. Tentando método alternativo.");
-                                                
-                                                // Método 2: Buscar usuários diretamente
-                                                $count_users = call_moodle_api('core_enrol_get_enrolled_users', [
-                                                    'courseid' => $curso['id']
-                                                ]);
-                                                
-                                                if (is_array($count_users)) {
-                                                    $total_inscritos = count($count_users);
-                                                    error_log("Curso {$curso['id']} ({$curso['fullname']}): método 2 - Total inscritos = $total_inscritos, Limite = $limite_inscricoes");
-                                                } else {
-                                                    // Método 3: Verificar pelo número de role assignments
-                                                    try {
-                                                        $role_count_params = [
-                                                            'courseid' => $curso['id'],
-                                                            'roleid' => 5 // ID do papel de estudante
-                                                        ];
-                                                        $role_assignments = call_moodle_api('core_role_get_role_assignments', $role_count_params);
-                                                        
-                                                        if (is_array($role_assignments) && !isset($role_assignments['exception']) && !isset($role_assignments['error'])) {
-                                                            $total_inscritos = count($role_assignments);
-                                                            error_log("Curso {$curso['id']} ({$curso['fullname']}): método 3 - Total inscritos via role assignments = $total_inscritos, Limite = $limite_inscricoes");
-                                                        } else {
-                                                            // Seguir um caminho conservador se não pudermos determinar o número real
-                                                            error_log("Curso {$curso['id']} ({$curso['fullname']}): falha em todos os métodos. Assumindo que tem vagas.");
-                                                            $total_inscritos = 0; // Assumir que não há inscritos se não conseguimos contar
-                                                        }
-                                                    } catch (Exception $e) {
-                                                        error_log("Erro ao contar inscritos via role assignments para curso {$curso['id']} ({$curso['fullname']}): " . $e->getMessage());
-                                                        $total_inscritos = 0; // Abordagem conservadora
-                                                    }
-                                                }
-                                            }
-                                            
-                                            $vagas_disponiveis = $limite_inscricoes - $total_inscritos;
-                                            $total_vagas = $limite_inscricoes;
-                                            
-                                            error_log("Curso {$curso['id']} ({$curso['fullname']}): Vagas disponíveis = $vagas_disponiveis de $total_vagas");
-                                            
-                                            // Só consideramos sem vagas se realmente não houver mais nenhuma
-                                            if ($vagas_disponiveis <= 0) {
-                                                error_log("Curso {$curso['id']} ({$curso['fullname']}): Vagas realmente esgotadas");
-                                                
-                                                // Permitir sobreposição pelo parâmetro force_open
-                                                if ($force_open) {
-                                                    error_log("Curso {$curso['id']} ({$curso['fullname']}): Inscrições forçadas abertas por parâmetro administrativo");
-                                                    $inscrição_aberta = true;
-                                                    $vagas_disponiveis = 1; // Indicar que há vagas disponíveis
-                                                } else {
-                                                    $inscrição_aberta = false; // Sem vagas disponíveis
-                                                }
-                                            }
-                                        } catch (Exception $e) {
-                                            error_log("Erro ao contar inscritos para curso {$curso['id']} ({$curso['fullname']}): " . $e->getMessage());
-                                            $vagas_disponiveis = $limite_inscricoes; // Assumir conservadoramente que todas as vagas estão disponíveis
-                                            $total_vagas = $limite_inscricoes;
-                                        }
-                                    } else {
-                                        $vagas_disponiveis = -1; // Sem limite
-                                        $total_vagas = -1;
-                                    }
-                                    
-                                    // Guardar mensagem de boas-vindas específica deste curso
-                                    $mensagem_boasvindas_curso = $enrol_config['customtext1'] ?? '';
-                                }
-                                
-                                break; // Encontrou autoinscrição, não precisa continuar o loop
-                            }
-                        }
-                        
-                        // Adicionar ao array de seminários disponíveis
-                        $seminarios_disponiveis[] = [
-                            'id' => $curso['id'],
-                            'fullname' => $curso['fullname'],
-                            'shortname' => $curso['shortname'] ?? '',
-                            'startdate' => $curso['startdate'] ?? 0,
-                            'enddate' => $curso['enddate'] ?? 0,
-                            'visible' => $curso_visivel,
-                            'within_period' => $dentro_periodo,
-                            'tem_autoinscrição' => $tem_autoinscrição,
-                            'inscrição_aberta' => $inscrição_aberta,
-                            'vagas_disponiveis' => $vagas_disponiveis,
-                            'total_vagas' => $total_vagas,
-                            'mensagem_boasvindas' => $mensagem_boasvindas_curso,
-                            'start_enrol' => $data_inicio_inscricao,
-                            'end_enrol' => $data_fim_inscricao,
-                            'is_local' => false
-                        ];
-                    }
-                }
-            }
-        }
-        
-        // Adicionar seminários locais se existirem
-        if (!empty($ids_locais) && count($ids_locais) > 0) {
-            $placeholders = implode(',', array_fill(0, count($ids_locais), '?'));
-            
-            // Modificar a consulta para ordenar por ID decrescente para garantir que pegamos o registro mais recente primeiro
-            $stmt_locais = $pdo->prepare("
-                SELECT l.* 
-                FROM seminar_cpb_cursos_locais l
-                WHERE l.id IN ($placeholders) AND l.visible = 1
-                ORDER BY l.id DESC
-            ");
-            $stmt_locais->execute($ids_locais);
-            $cursos_locais_tmp = $stmt_locais->fetchAll(PDO::FETCH_ASSOC);
-            
-            // Filtrar registros duplicados mantendo apenas o mais recente (maior ID)
-            $cursos_locais = [];
-            $nomes_processados = [];
-            
-            foreach ($cursos_locais_tmp as $curso) {
-                $nome_normalizado = strtolower(trim($curso['fullname']));
-                
-                // Se esse nome já foi processado, pular (já pegamos o registro mais recente)
-                if (in_array($nome_normalizado, $nomes_processados)) {
-                    error_log("DUPLICAÇÃO: Ignorando registro duplicado mais antigo do seminário '{$curso['fullname']}' (ID: {$curso['id']})");
-                    continue;
-                }
-                
-                // Adicionar ao array filtrado e marcar o nome como processado
-                $cursos_locais[] = $curso;
-                $nomes_processados[] = $nome_normalizado;
-                error_log("SELECIONADO: Usando registro mais recente do seminário '{$curso['fullname']}' (ID: {$curso['id']})");
-            }
-            
-            foreach ($cursos_locais as $curso) {
-                // Log detalhado para diagnóstico
-                error_log("DIAGNÓSTICO DETALHADO - Processando seminário local: ID={$curso['id']}, Nome={$curso['fullname']}, Limite Vagas={$curso['limite_vagas']}");
-                
-                // Verificar o limite de vagas para cursos locais
-                $vagas_disponiveis = -1; // Valor padrão: sem limite
-                $total_vagas = -1;
-                
-                // Verificar se há um limite de vagas definido
-                if (isset($curso['limite_vagas']) && $curso['limite_vagas'] > 0) {
-                    $total_vagas = (int)$curso['limite_vagas'];
-                }
-                
-                // Contar inscritos neste curso local
-                try {
-                    // Verificar se a tabela de relacionamento existe
-                    $tabela_relacao_existe = false;
-                    try {
-                        $check_tabela = $pdo->query("SHOW TABLES LIKE 'seminar_cpb_inscricoes_cursos'");
-                        $tabela_relacao_existe = $check_tabela->rowCount() > 0;
-                    } catch (Exception $e) {
-                        error_log("Erro ao verificar existência da tabela: " . $e->getMessage());
-                    }
-                    
-                    // Se a tabela de relacionamento existe, usar contagem específica do seminário
-                    if ($tabela_relacao_existe) {
-                        $stmt_count_local = $pdo->prepare("
-                            SELECT COUNT(*) FROM seminar_cpb_inscricoes_cursos ic
-                            JOIN seminar_cpb_inscricoes i ON ic.inscricao_id = i.id
-                            WHERE i.eventoid = :evento_id 
-                            AND i.status = 1
-                            AND ic.curso_id = :curso_id
-                        ");
-                        $stmt_count_local->execute([
-                            'evento_id' => $evento['id'],
-                            'curso_id' => $curso['id'] // ID do seminário (pode ser negativo para cursos locais)
-                        ]);
-                        $total_inscritos_local = $stmt_count_local->fetchColumn();
-                        error_log("Usando contagem específica do seminário {$curso['id']}: {$total_inscritos_local} inscritos");
-                    } else {
-                        // Se não existe a tabela de relacionamento, usar contagem antiga baseada apenas no evento
-                        $stmt_count_local = $pdo->prepare("
-                            SELECT COUNT(*) FROM seminar_cpb_inscricoes i
-                            WHERE i.eventoid = :evento_id AND i.status = 1
-                        ");
-                        $stmt_count_local->execute([
-                            'evento_id' => $evento['id']
-                        ]);
-                        $total_inscritos_local = $stmt_count_local->fetchColumn();
-                        error_log("Usando contagem antiga baseada apenas no evento: {$total_inscritos_local} inscritos");
-                    }
-                    
-                    // Garantir que o valor de limite_vagas seja sempre tratado corretamente
-                    // Se for obtido do Moodle via API, verificar se customint3 está definido e é maior que zero
-                    $limite_vagas = (int)$curso['limite_vagas'];
-                    $total_vagas = $limite_vagas;
-                    
-                    // Usar -1 apenas se certamente não há limite configurado
-                    if ($limite_vagas === 0) {
-                        // Se o limite de vagas for zero, considerar como "sem limite" (isso é o padrão do Moodle)
-                        $vagas_disponiveis = -1; // Sem limite
-                        $total_vagas = -1; // Usar -1 para indicar "ilimitado"
-                        error_log("Seminário {$curso['id']} ({$curso['fullname']}): Limite de vagas definido como 0, considerando como ilimitado");
-                    } else if ($limite_vagas > 0) {
-                        // Calcular vagas disponíveis quando há limite positivo
-                        $vagas_disponiveis = $total_vagas - $total_inscritos_local;
-                        
-                        // Tratamento especial para o evento de João Pessoa (sem depender do nome do seminário)
-                        // Removido código hardcoded e substituído por consulta ao banco
-                        
-                        // Modificar para obter o limite real da base de dados
-                        // Usar valores reais da base de dados em vez de hardcoded
-                        if ($token_evento == 'joaopessoa' && $vagas_disponiveis <= 0) {
-                            // Para eventos com token joaopessoa, verificar disponibilidade real de vagas
-                            $stmt_limite = $pdo->prepare("
-                                SELECT limite_vagas 
-                                FROM seminar_cpb_cursos_locais 
-                                WHERE id = :curso_id
-                            ");
-                            $stmt_limite->execute(['curso_id' => abs($curso['id'])]);
-                            $limite_real = $stmt_limite->fetchColumn();
-                            
-                            if ($limite_real > 0) {
-                                // Usar o limite real configurado no banco
-                                $total_vagas = (int)$limite_real;
-                                $vagas_disponiveis = $total_vagas - $total_inscritos_local;
-                                error_log("SEMINÁRIO ID {$curso['id']} ({$curso['fullname']}): Usando limite real de {$total_vagas} vagas. Vagas disponíveis: {$vagas_disponiveis}");
-                            }
-                            
-                            // Se ainda não há vagas mesmo com o limite real, forçar disponibilidade para o token joaopessoa
-                            if ($vagas_disponiveis <= 0) {
-                                error_log("EVENTO JOAOPESSOA: Forçando vagas disponíveis para o seminário {$curso['id']}");
-                                $vagas_disponiveis = 10; // Forçar disponibilidade de vagas
-                            }
-                        }
-                    }
-                    
-                    error_log("Seminário {$curso['id']} ({$curso['fullname']}): Total inscritos = $total_inscritos_local, Limite = $total_vagas, Vagas disponíveis = $vagas_disponiveis");
-                    error_log("Seminário {$curso['id']} ({$curso['fullname']}): Inscrição aberta = " . (($vagas_disponiveis > 0 || $vagas_disponiveis === -1) ? 'SIM' : 'NÃO'));
-                    
-                    // Se não há mais vagas e não foi solicitado para forçar abertura
-                    if ($vagas_disponiveis <= 0 && !$force_open) {
-                        error_log("Seminário {$curso['id']} ({$curso['fullname']}): Vagas esgotadas");
-                        continue; // Pular este curso, não incluir na lista de disponíveis
-                    }
-                } catch (PDOException $e) {
-                    error_log("Erro ao contar inscritos para curso local {$curso['id']} ({$curso['fullname']}): " . $e->getMessage());
-                    // Em caso de erro, assumimos que há vagas disponíveis
-                    $vagas_disponiveis = $total_vagas;
-                }
-                
-                $seminarios_disponiveis[] = [
-                    'id' => $curso['id'] * -1, // ID negativo para diferenciar dos do Moodle
-                    'fullname' => $curso['fullname'],
-                    'shortname' => $curso['shortname'] ?? '',
-                    'startdate' => $curso['timecreated'] ?? 0,
-                    'enddate' => 0, // Sem data de término para cursos locais
-                    'visible' => true,
-                    'within_period' => true, // Cursos locais sempre disponíveis
-                    'tem_autoinscrição' => true,
-                    'inscrição_aberta' => ($vagas_disponiveis > 0) || ($vagas_disponiveis === -1) || ($total_vagas === -1) || ($token_evento == 'joaopessoa'), // Aberto se há vagas, se for explicitamente ilimitado (-1) ou token João Pessoa
-                    'vagas_disponiveis' => $vagas_disponiveis,
-                    'total_vagas' => $total_vagas,
-                    'mensagem_boasvindas' => '',
-                    'start_enrol' => 0, // Sem restrição de data de início
-                    'end_enrol' => 0,   // Sem restrição de data de fim
-                    'is_local' => true
-                ];
-            }
-        }
     }
 } catch (PDOException $e) {
     error_log("Erro ao buscar cursos associados: " . $e->getMessage());
 }
 
-// Ordenar seminários por nome
-usort($seminarios_disponiveis, function($a, $b) {
-    return strcasecmp($a['fullname'], $b['fullname']);
-});
-
-// Estados brasileiros para o formulário
-$estados = [
-    'AC' => 'Acre',
-    'AL' => 'Alagoas',
-    'AP' => 'Amapá',
-    'AM' => 'Amazonas',
-    'BA' => 'Bahia',
-    'CE' => 'Ceará',
-    'DF' => 'Distrito Federal',
-    'ES' => 'Espírito Santo',
-    'GO' => 'Goiás',
-    'MA' => 'Maranhão',
-    'MT' => 'Mato Grosso',
-    'MS' => 'Mato Grosso do Sul',
-    'MG' => 'Minas Gerais',
-    'PA' => 'Pará',
-    'PB' => 'Paraíba',
-    'PR' => 'Paraná',
-    'PE' => 'Pernambuco',
-    'PI' => 'Piauí',
-    'RJ' => 'Rio de Janeiro',
-    'RN' => 'Rio Grande do Norte',
-    'RS' => 'Rio Grande do Sul',
-    'RO' => 'Rondônia',
-    'RR' => 'Roraima',
-    'SC' => 'Santa Catarina',
-    'SP' => 'São Paulo',
-    'SE' => 'Sergipe',
-    'TO' => 'Tocantins'
-];
-
-// Obter mensagem de boas-vindas do curso base
-$mensagem_boasvindas = '';
-try {
-    // Substituir acesso direto ao banco por API
-    $course_info = call_moodle_api('core_course_get_courses', [
-        'options' => ['ids' => [$curso_base_id]]
-    ]);
+// Buscar informações de seminários do Moodle
+if (!empty($ids_moodle)) {
+    // Preparar query string com IDs
+    $ids_string = implode(',', $ids_moodle);
     
-    if (!isset($course_info['exception']) && !isset($course_info['error']) && !empty($course_info)) {
-        $course = $course_info[0];
+    $api_params = [
+        'field' => 'ids',
+        'value' => $ids_string
+    ];
+    
+    $course_response = call_moodle_api('core_course_get_courses_by_field', $api_params);
+    
+    if (!isset($course_response['exception']) && !isset($course_response['error']) && 
+        isset($course_response['courses']) && !empty($course_response['courses'])) {
         
-        // Buscar métodos de inscrição para o curso
-        $enrol_instances = call_moodle_api('core_enrol_get_course_enrolment_methods', [
-            'courseid' => $curso_base_id
-        ]);
-        
-        if (!isset($enrol_instances['exception']) && !isset($enrol_instances['error'])) {
-            foreach ($enrol_instances as $instance) {
-                if ($instance['type'] === 'self') {
-                    // Obter configurações da autoinscrição, incluindo a mensagem de boas-vindas
-                    $enrol_config = call_moodle_api('core_enrol_get_instance_info', [
-                        'instanceid' => $instance['id']
-                    ]);
-                    
-                    if (!isset($enrol_config['exception']) && !isset($enrol_config['error']) && 
-                        isset($enrol_config['customtext1'])) {
-                        $mensagem_boasvindas = $enrol_config['customtext1'];
-                        break;
+        foreach ($course_response['courses'] as $curso) {
+            $agora = time();
+            
+            // Verificar visibilidade e período
+            $curso_visivel = ($curso['visible'] ?? 0) == 1;
+            $dentro_periodo = 
+                (!isset($curso['enddate']) || $curso['enddate'] == 0 || $curso['enddate'] > $agora) && 
+                (!isset($curso['startdate']) || $curso['startdate'] == 0 || $curso['startdate'] <= $agora);
+            
+            if ($curso_visivel) {
+                // Buscar métodos de inscrição e vagas disponíveis
+                $enrol_methods = call_moodle_api('core_enrol_get_course_enrolment_methods', [
+                    'courseid' => $curso['id']
+                ]);
+                
+                // Verificar método de autoinscrição e disponibilidade
+                $tem_autoinscrição = false;
+                $vagas_disponiveis = 0;
+                $total_vagas = 0;
+                $inscrição_aberta = false;
+                $mensagem_boasvindas_curso = '';
+                $data_inicio_inscricao = 0;
+                $data_fim_inscricao = 0;
+                
+                foreach ($enrol_methods as $method) {
+                    if ($method['type'] === 'self') {
+                        $tem_autoinscrição = true;
+                        
+                        // Obter configurações da autoinscrição
+                        $enrol_config = call_moodle_api('core_enrol_get_instance_info', [
+                            'instanceid' => $method['id']
+                        ]);
+                        
+                        if (!isset($enrol_config['exception']) && !isset($enrol_config['error'])) {
+                            // Verificar status (ativo/desativado)
+                            $inscrição_aberta = ($enrol_config['status'] ?? 0) == 0; // 0 = ativo
+                            
+                            // Verificar datas de início e fim da inscrição
+                            $data_inicio_inscricao = $enrol_config['enrolstartdate'] ?? 0;
+                            $data_fim_inscricao = $enrol_config['enrolenddate'] ?? 0;
+                            
+                            if ($data_inicio_inscricao > 0 && $data_inicio_inscricao > $agora) {
+                                $inscrição_aberta = false; // Inscrição ainda não começou
+                            }
+                            
+                            if ($data_fim_inscricao > 0 && $data_fim_inscricao < $agora) {
+                                $inscrição_aberta = false; // Inscrição já terminou
+                            }
+                            
+                            // Verificar limite de inscrições
+                            $limite_inscricoes = $enrol_config['customint3'] ?? 0; // 0 = sem limite
+                            $status_inscrição = $enrol_config['status'] ?? 0; // 0 = ativo, 1 = desabilitado
+                            
+                            error_log("Curso {$curso['id']} ({$curso['fullname']}): limite_inscricoes=$limite_inscricoes, status_inscrição=$status_inscrição");
+                            
+                            if ($limite_inscricoes > 0) {
+                                // Buscar número atual de inscritos - usando método alternativo
+                                try {
+                                    // Método 1: Contar participantes através da API separada
+                                    $count_params = [
+                                        'courseid' => $curso['id'],
+                                        'withcapability' => '',  // Deixe vazio para contar todos os inscritos
+                                        'search' => '',
+                                        'sort' => 'lastname',
+                                        'limitfrom' => 0,
+                                        'limitnumber' => 0 // 0 para listar todos
+                                    ];
+                                    
+                                    $count_response = call_moodle_api('core_enrol_get_enrolled_users_with_capability', [
+                                        'coursecapabilities' => [$count_params]
+                                    ]);
+                                    
+                                    if (!isset($count_response['exception']) && 
+                                        !isset($count_response['error']) && 
+                                        is_array($count_response) && 
+                                        isset($count_response[0]['users'])) {
+                                        
+                                        $total_inscritos = count($count_response[0]['users']);
+                                        error_log("Curso {$curso['id']} ({$curso['fullname']}): método 1 - Total inscritos = $total_inscritos, Limite = $limite_inscricoes");
+                                    } else {
+                                        // Se houve erro, tentar outro método
+                                        error_log("Curso {$curso['id']} ({$curso['fullname']}): falha no método 1. Tentando método alternativo.");
+                                        
+                                        // Método 2: Buscar usuários diretamente
+                                        $count_users = call_moodle_api('core_enrol_get_enrolled_users', [
+                                            'courseid' => $curso['id']
+                                        ]);
+                                        
+                                        if (is_array($count_users)) {
+                                            $total_inscritos = count($count_users);
+                                            error_log("Curso {$curso['id']} ({$curso['fullname']}): método 2 - Total inscritos = $total_inscritos, Limite = $limite_inscricoes");
+                                        } else {
+                                            // Método 3: Verificar pelo número de role assignments
+                                            try {
+                                                $role_count_params = [
+                                                    'courseid' => $curso['id'],
+                                                    'roleid' => 5 // ID do papel de estudante
+                                                ];
+                                                $role_assignments = call_moodle_api('core_role_get_role_assignments', $role_count_params);
+                                                
+                                                if (is_array($role_assignments) && !isset($role_assignments['exception']) && !isset($role_assignments['error'])) {
+                                                    $total_inscritos = count($role_assignments);
+                                                    error_log("Curso {$curso['id']} ({$curso['fullname']}): método 3 - Total inscritos via role assignments = $total_inscritos, Limite = $limite_inscricoes");
+                                                } else {
+                                                    // Seguir um caminho conservador se não pudermos determinar o número real
+                                                    error_log("Curso {$curso['id']} ({$curso['fullname']}): falha em todos os métodos. Assumindo que tem vagas.");
+                                                    $total_inscritos = 0; // Assumir que não há inscritos se não conseguimos contar
+                                                }
+                                            } catch (Exception $e) {
+                                                error_log("Erro ao contar inscritos via role assignments para curso {$curso['id']} ({$curso['fullname']}): " . $e->getMessage());
+                                                $total_inscritos = 0; // Abordagem conservadora
+                                            }
+                                        }
+                                    }
+                                    
+                                    $vagas_disponiveis = $limite_inscricoes - $total_inscritos;
+                                    $total_vagas = $limite_inscricoes;
+                                    
+                                    error_log("Curso {$curso['id']} ({$curso['fullname']}): Vagas disponíveis = $vagas_disponiveis de $total_vagas");
+                                    
+                                    // Só consideramos sem vagas se realmente não houver mais nenhuma
+                                    if ($vagas_disponiveis <= 0) {
+                                        error_log("Curso {$curso['id']} ({$curso['fullname']}): Vagas realmente esgotadas");
+                                        
+                                        // Permitir sobreposição pelo parâmetro force_open
+                                        if ($force_open) {
+                                            error_log("Curso {$curso['id']} ({$curso['fullname']}): Inscrições forçadas abertas por parâmetro administrativo");
+                                            $inscrição_aberta = true;
+                                            $vagas_disponiveis = 1; // Indicar que há vagas disponíveis
+                                        } else {
+                                            $inscrição_aberta = false; // Sem vagas disponíveis
+                                        }
+                                    }
+                                } catch (Exception $e) {
+                                    error_log("Erro ao contar inscritos para curso {$curso['id']} ({$curso['fullname']}): " . $e->getMessage());
+                                    $vagas_disponiveis = $limite_inscricoes; // Assumir conservadoramente que todas as vagas estão disponíveis
+                                    $total_vagas = $limite_inscricoes;
+                                }
+                            } else {
+                                $vagas_disponiveis = -1; // Sem limite
+                                $total_vagas = -1;
+                            }
+                            
+                            // Guardar mensagem de boas-vindas específica deste curso
+                            $mensagem_boasvindas_curso = $enrol_config['customtext1'] ?? '';
+                        }
+                        
+                        break; // Encontrou autoinscrição, não precisa continuar o loop
                     }
                 }
+                
+                // Adicionar ao array de seminários disponíveis
+                $seminarios_disponiveis[] = [
+                    'id' => $curso['id'],
+                    'fullname' => $curso['fullname'],
+                    'shortname' => $curso['shortname'] ?? '',
+                    'startdate' => $curso['startdate'] ?? 0,
+                    'enddate' => $curso['enddate'] ?? 0,
+                    'visible' => $curso_visivel,
+                    'within_period' => $dentro_periodo,
+                    'tem_autoinscrição' => $tem_autoinscrição,
+                    'inscrição_aberta' => $inscrição_aberta,
+                    'vagas_disponiveis' => $vagas_disponiveis,
+                    'total_vagas' => $total_vagas,
+                    'mensagem_boasvindas' => $mensagem_boasvindas_curso,
+                    'start_enrol' => $data_inicio_inscricao,
+                    'end_enrol' => $data_fim_inscricao,
+                    'is_local' => false
+                ];
             }
         }
     }
-} catch (Exception $e) {
-    error_log("Erro ao buscar mensagem de boas-vindas: " . $e->getMessage());
 }
 
-$erro_validacao = '';
-$sucesso_mensagem = '';
-$user_seminarios = [];
-
-// Processar formulário de inscrição
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['acao']) && $_POST['acao'] === 'inscrever') {
-    $cpf = preg_replace('/[^0-9]/', '', $_POST['cpf'] ?? '');
-    $nome = trim($_POST['nome'] ?? '');
-    $sobrenome = trim($_POST['sobrenome'] ?? '');
-    $email = filter_var($_POST['email'] ?? '', FILTER_SANITIZE_EMAIL);
-    $estado = trim($_POST['estado'] ?? '');
-    $cidade = trim($_POST['cidade'] ?? '');
-    $seminarios_selecionados = $_POST['seminarios'] ?? [];
+// Adicionar seminários locais se existirem
+if (!empty($ids_locais) && count($ids_locais) > 0) {
+    $placeholders = implode(',', array_fill(0, count($ids_locais), '?'));
     
-    // Usar o CPF como senha
-    $senha = $cpf;
+    // Modificar a consulta para ordenar por ID decrescente para garantir que pegamos o registro mais recente primeiro
+    $stmt_locais = $pdo->prepare("
+        SELECT l.* 
+        FROM seminar_cpb_cursos_locais l
+        WHERE l.id IN ($placeholders) AND l.visible = 1
+        ORDER BY l.id DESC
+    ");
+    $stmt_locais->execute($ids_locais);
+    $cursos_locais_tmp = $stmt_locais->fetchAll(PDO::FETCH_ASSOC);
     
-    // Validar dados
-    if (strlen($cpf) !== 11) {
-        $erro_validacao = "CPF inválido. Por favor, digite um CPF válido com 11 dígitos.";
-    } elseif (empty($nome) || empty($sobrenome)) {
-        $erro_validacao = "Nome e sobrenome são obrigatórios.";
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $erro_validacao = "E-mail inválido.";
-    } elseif (empty($estado) || empty($cidade)) {
-        $erro_validacao = "Estado e cidade são obrigatórios.";
-    } else {
-        // Verificar se o usuário já existe no Moodle pelo CPF
-        try {
-            // Buscar usuário pelo campo personalizado CPF usando a API
-            $usuario_existente = null;
-            $usuario_por_email = null;
-            
-            // Verificar se o CPF já está registrado
-            $users_by_cpf = call_moodle_api('core_user_get_users', [
-                'criteria' => [
-                    [
-                        'key' => 'profile_field_cpf',
-                        'value' => $cpf
-                    ]
-                ]
-            ]);
-            
-            if (!isset($users_by_cpf['exception']) && !isset($users_by_cpf['error']) && 
-                isset($users_by_cpf['users']) && count($users_by_cpf['users']) > 0) {
-                $usuario_existente = $users_by_cpf['users'][0];
-            }
-            
-            // Verificar se o e-mail já está em uso
-            $users_by_email = call_moodle_api('core_user_get_users', [
-                'criteria' => [
-                    [
-                        'key' => 'email',
-                        'value' => $email
-                    ]
-                ]
-            ]);
-            
-            if (!isset($users_by_email['exception']) && !isset($users_by_email['error']) && 
-                isset($users_by_email['users']) && count($users_by_email['users']) > 0) {
-                $usuario_por_email = $users_by_email['users'][0];
-            }
-            
-            // Verificar conflito de dados entre usuários existentes
-            if ($usuario_existente && $usuario_por_email && $usuario_existente['id'] !== $usuario_por_email['id']) {
-                $erro_validacao = "Já existe um usuário com este e-mail vinculado a outro CPF. Por favor, entre em contato com o suporte.";
-            } else {
-                // Determinar o ID do usuário
-                $user_id = null;
-                
-                if ($usuario_existente) {
-                    // Usuário já existe com este CPF
-                    $user_id = $usuario_existente['id'];
-                    
-                    // Verificar se os dados precisam ser atualizados
-                    if ($usuario_existente['firstname'] !== $nome || 
-                        $usuario_existente['lastname'] !== $sobrenome || 
-                        $usuario_existente['email'] !== $email) {
-                        
-                        // Atualizar dados do usuário via API
-                        $response = call_moodle_api('core_user_update_users', ['users' => [
-                            [
-                                'id' => $user_id,
-                                'firstname' => $nome,
-                                'lastname' => $sobrenome,
-                                'email' => $email
-                            ]
-                        ]]);
-                        
-                        error_log("Usuário atualizado: " . json_encode($response));
-                    }
-                } else if ($usuario_por_email) {
-                    // Usuário já existe com este e-mail, mas não tem CPF
-                    $user_id = $usuario_por_email['id'];
-                    
-                    // Atualizar nome e sobrenome se necessário
-                    if ($usuario_por_email['firstname'] !== $nome || 
-                        $usuario_por_email['lastname'] !== $sobrenome) {
-                        
-                        $response = call_moodle_api('core_user_update_users', ['users' => [
-                            [
-                                'id' => $user_id,
-                                'firstname' => $nome,
-                                'lastname' => $sobrenome
-                            ]
-                        ]]);
-                        
-                        error_log("Nome e sobrenome atualizados: " . json_encode($response));
-                    }
-                    
-                    // Adicionar campo CPF para este usuário usando API do Moodle
-                    $response = call_moodle_api('core_user_update_user_preferences', [
-                        'userid' => $user_id,
-                        'preferences' => [
-                            [
-                                'type' => 'profile_field_cpf', 
-                                'value' => $cpf
-                            ]
-                        ]
-                    ]);
-                    
-                    error_log("Campo CPF adicionado: " . json_encode($response));
-                } else {
-                    // Criar novo usuário
-                    $username = "cpf" . $cpf;
-                    
-                    $create_params = [
-                        'users' => [
-                            [
-                                'username' => $username,
-                                'password' => $senha,
-                                'firstname' => $nome,
-                                'lastname' => $sobrenome,
-                                'email' => $email,
-                                'auth' => 'manual',
-                                'preferences' => [
-                                    [
-                                        'type' => 'auth_forcepasswordchange',
-                                        'value' => 0
-                                    ],
-                                    [
-                                        'type' => 'profile_field_cpf',
-                                        'value' => $cpf
-                                    ]
-                                ]
-                            ]
-                        ]
-                    ];
-                    
-                    $response = call_moodle_api('core_user_create_users', $create_params);
-                    
-                    if (isset($response[0]['id'])) {
-                        $user_id = $response[0]['id'];
-                        error_log("Novo usuário criado: $user_id");
-                    } else {
-                        error_log("Erro ao criar usuário: " . json_encode($response));
-                        $erro_validacao = "Erro ao criar usuário. Por favor, tente novamente.";
-                    }
-                }
-                
-                // Se temos um user_id válido, prosseguir com a inscrição
-                if ($user_id && !$erro_validacao) {
-                    $inscricao_bem_sucedida = false;
-                    $mensagens_boasvindas_seminarios = [];
-                    
-                    // Inscrever no curso base (Educação Paralímpica)
-                    $enrol_params = [
-                        'enrolments' => [
-                            [
-                                'roleid' => 5, // role=student
-                                'userid' => $user_id,
-                                'courseid' => $curso_base_id
-                            ]
-                        ]
-                    ];
-                    
-                    $enrol_response = call_moodle_api('enrol_manual_enrol_users', $enrol_params);
-                    $inscricao_bem_sucedida = true;
-                    
-                    // Inscrever nos seminários selecionados
-                    $seminarios_inscritos = []; // Para armazenar informações dos seminários em que o usuário foi inscrito
-                    
-                    if (isset($_POST['seminarios']) && is_array($_POST['seminarios'])) {
-                        foreach ($_POST['seminarios'] as $seminario_id) {
-                            // Encontrar o seminário correspondente
-                            $seminario = null;
-                            foreach ($seminarios_disponiveis as $sem) {
-                                if ($sem['id'] == $seminario_id) {
-                                    $seminario = $sem;
-                                    break;
-                                }
-                            }
-                            
-                            // Verificar se o seminário existe e está disponível
-                            if (!$seminario || !$seminario['inscrição_aberta']) {
-                                continue; // Pular para o próximo seminário
-                            }
-                            
-                            // Inscrever o usuário no seminário
-                            $sem_params = [
-                                'enrolments' => [
-                                    [
-                                        'roleid' => 5, // role=student
-                                        'userid' => $user_id,
-                                        'courseid' => abs($seminario['id']) // Usar valor absoluto para IDs negativos
-                                    ]
-                                ]
-                            ];
-                            
-                            $sem_response = call_moodle_api('enrol_manual_enrol_users', $sem_params);
-                            
-                            // Registrar a inscrição em nosso banco de dados
-                            try {
-                                // Verificar se já existe inscrição
-                                $stmt_check = $pdo->prepare("
-                                    SELECT id FROM seminar_cpb_inscricoes 
-                                    WHERE eventoid = :eventoid AND userid = :userid
-                                ");
-                                $stmt_check->execute(['eventoid' => $evento['id'], 'userid' => $user_id]);
-                                $inscricao_exists = $stmt_check->fetch(PDO::FETCH_ASSOC);
-                                
-                                $now = time();
-                                
-                                if ($inscricao_exists) {
-                                    // Atualizar inscrição existente
-                                    $stmt_update = $pdo->prepare("
-                                        UPDATE seminar_cpb_inscricoes SET
-                                        cpf = :cpf,
-                                        estado = :estado,
-                                        cidade = :cidade,
-                                        status = 1,
-                                        timemodified = :timemodified
-                                        WHERE id = :id
-                                    ");
-                                    $stmt_update->execute([
-                                        'cpf' => $cpf,
-                                        'estado' => $estado,
-                                        'cidade' => $cidade,
-                                        'timemodified' => $now,
-                                        'id' => $inscricao_exists['id']
-                                    ]);
-                                } else {
-                                    // Criar nova inscrição
-                                    $stmt_insert = $pdo->prepare("
-                                        INSERT INTO seminar_cpb_inscricoes
-                                        (eventoid, userid, cpf, estado, cidade, status, timecreated, timemodified)
-                                        VALUES
-                                        (:eventoid, :userid, :cpf, :estado, :cidade, 1, :timecreated, :timemodified)
-                                    ");
-                                    $stmt_insert->execute([
-                                        'eventoid' => $evento['id'],
-                                        'userid' => $user_id,
-                                        'cpf' => $cpf,
-                                        'estado' => $estado,
-                                        'cidade' => $cidade,
-                                        'timecreated' => $now,
-                                        'timemodified' => $now
-                                    ]);
-                                }
-                                
-                                // Adicionar à lista de seminários inscritos
-                                $seminarios_inscritos[] = [
-                                    'id' => $seminario['id'],
-                                    'nome' => $seminario['fullname'],
-                                    'boasvindas' => $seminario['mensagem_boasvindas']
-                                ];
-                                
-                                // Registrar relação entre inscrição e curso/seminário
-                                try {
-                                    // Verificar primeiro se a tabela existe
-                                    $stmt_check = $pdo->query("SHOW TABLES LIKE 'seminar_cpb_inscricoes_cursos'");
-                                    if ($stmt_check->rowCount() > 0) {
-                                        // A tabela existe, pode inserir o registro
-                                        $stmt_rel = $pdo->prepare("
-                                            INSERT INTO seminar_cpb_inscricoes_cursos 
-                                            (inscricao_id, curso_id, timecreated)
-                                            VALUES (:inscricao_id, :curso_id, :timecreated)
-                                        ");
-                                        
-                                        $inscricao_id = $inscricao_exists ? $inscricao_exists['id'] : $pdo->lastInsertId();
-                                        $curso_id = $seminario['id']; // Pode ser ID positivo (Moodle) ou negativo (local)
-                                        
-                                        $stmt_rel->execute([
-                                            'inscricao_id' => $inscricao_id,
-                                            'curso_id' => $curso_id,
-                                            'timecreated' => $now
-                                        ]);
-                                        
-                                        error_log("Relação registrada: inscrição {$inscricao_id} - seminário {$curso_id}");
-                                    } else {
-                                        error_log("Tabela seminar_cpb_inscricoes_cursos não existe - relação não registrada");
-                                    }
-                                } catch (PDOException $e) {
-                                    // Se houver erro (por exemplo, registro duplicado), apenas log
-                                    error_log("Erro ao registrar relação inscrição-curso: " . $e->getMessage());
-                                }
-                                
-                                // Guardar mensagem de boas-vindas se existir
-                                if (!empty($seminario['mensagem_boasvindas'])) {
-                                    $mensagens_boasvindas_seminarios[$seminario['id']] = $seminario['mensagem_boasvindas'];
-                                }
-                                
-                                error_log("Inscrição registrada para evento {$evento['id']}, usuário $user_id, seminário {$seminario['id']}");
-                            } catch (PDOException $e) {
-                                error_log("Erro ao registrar inscrição: " . $e->getMessage());
-                            }
-                        }
-                    }
-                    
-                    if ($inscricao_bem_sucedida) {
-                        // Buscar cursos em que o usuário está inscrito
-                        $user_courses = call_moodle_api('core_enrol_get_users_courses', ['userid' => $user_id]);
-                        
-                        $sucesso_mensagem = "Inscrição realizada com sucesso! Suas credenciais de acesso ao Moodle são:<br>
-                                            <strong>Login:</strong> $cpf<br>
-                                            <strong>Senha:</strong> $cpf";
-                        
-                        // Adicionar lista de seminários inscritos
-                        if (!empty($seminarios_inscritos)) {
-                            $sucesso_mensagem .= "<br><br><strong>Você foi inscrito nos seguintes seminários:</strong><ul>";
-                            foreach ($seminarios_inscritos as $sem) {
-                                $sucesso_mensagem .= "<li>" . htmlspecialchars($sem['nome']) . "</li>";
-                            }
-                            $sucesso_mensagem .= "</ul>";
-                            
-                            // Adicionar mensagem de boas-vindas do seminário (ou a padrão se não houver específica)
-                            if (!empty($mensagens_boasvindas_seminarios)) {
-                                foreach ($mensagens_boasvindas_seminarios as $sem_id => $boasvindas) {
-                                    if (!empty($boasvindas)) {
-                                        $sucesso_mensagem .= "<div class='seminario-boasvindas'>";
-                                        $sucesso_mensagem .= "<h4>Mensagem de Boas-vindas do Seminário</h4>";
-                                        $sucesso_mensagem .= "<div>" . nl2br(htmlspecialchars($boasvindas)) . "</div>";
-                                        $sucesso_mensagem .= "</div>";
-                                    }
-                                }
-                            } elseif (!empty($mensagem_boasvindas)) {
-                                $sucesso_mensagem .= "<br><br><strong>Mensagem de Boas-vindas:</strong><br>" . $mensagem_boasvindas;
-                            }
-                        } else {
-                            $sucesso_mensagem .= "<br><br>Você foi inscrito no curso base de Educação Paralímpica.";
-                            
-                            if (!empty($mensagem_boasvindas)) {
-                                $sucesso_mensagem .= "<br><br><strong>Mensagem de Boas-vindas:</strong><br>" . $mensagem_boasvindas;
-                            }
-                        }
-                    } else {
-                        $erro_validacao = "Houve um erro ao realizar a inscrição. Por favor, tente novamente.";
-                    }
-                }
-            }
-        } catch (PDOException $e) {
-            error_log("Erro DB: " . $e->getMessage());
-            $userid = null;
-            
-            if ($usuario_existente) {
-                // Usuário já existe
-                $userid = $usuario_existente['id'];
-                $inscricao_status = "existente";
-            } elseif ($email_existente) {
-                $erro_validacao = "Este e-mail já está cadastrado. Por favor, use outro e-mail ou tente recuperar sua senha.";
-            } else {
-                // Criar novo usuário via API do Moodle
-                $create_user = call_moodle_api('core_user_create_users', [
-                    'users' => [[
-                        'username' => $cpf,
-                        'password' => $senha,
-                        'firstname' => $nome,
-                        'lastname' => $sobrenome,
-                        'email' => $email,
-                        'city' => $cidade,
-                        'country' => 'BR',
-                        'customfields' => [
-                            [
-                                'type' => 'cpf',
-                                'value' => $cpf
-                            ],
-                            [
-                                'type' => 'profile_origem',
-                                'value' => $evento['origem_token']
-                            ],
-                            [
-                                'type' => 'estado',
-                                'value' => $estado
-                            ]
-                        ]
-                    ]]
-                ]);
-                
-                if (isset($create_user['error']) || isset($create_user['exception'])) {
-                    $erro_validacao = "Erro ao criar usuário: " . 
-                        (isset($create_user['message']) ? $create_user['message'] : 
-                        (isset($create_user['error']) ? $create_user['error'] : "Erro desconhecido"));
-                } else {
-                    $userid = $create_user[0]['id'] ?? null;
-                    $inscricao_status = "novo";
-                }
-            }
-            
-            // Se temos um ID de usuário válido, inscrever no curso base e nos seminários selecionados
-            if (!empty($userid) && empty($erro_validacao)) {
-                // Inscrever no curso base (ID 289)
-                $enrol_base = call_moodle_api('enrol_manual_enrol_users', [
-                    'enrolments' => [[
-                        'roleid' => 5, // estudante
-                        'userid' => $userid,
-                        'courseid' => $curso_base_id
-                    ]]
-                ]);
-                
-                if (isset($enrol_base['error']) || isset($enrol_base['exception'])) {
-                    $erro_validacao = "Erro ao inscrever no curso base: " . 
-                        (isset($enrol_base['message']) ? $enrol_base['message'] : 
-                        (isset($enrol_base['error']) ? $enrol_base['error'] : "Erro desconhecido"));
-                } else {
-                    $seminarios_inscritos = [];
-                    
-                    // Inscrever nos seminários selecionados
-                    foreach ($seminarios_selecionados as $seminar_id) {
-                        // Verificar se o ID do seminário é válido
-                        $seminar_id = intval($seminar_id);
-                        if ($seminar_id <= 0) continue;
-
-                        // Verificar se o seminário está visível antes de tentar inscrever
-                        try {
-                            // Substituir consulta direta ao banco por chamada à API
-                            $course_info = call_moodle_api('core_course_get_courses', [
-                                'options' => ['ids' => [$seminar_id]]
-                            ]);
-                            
-                            // Pular seminários ocultos ou inexistentes
-                            if (isset($course_info['exception']) || isset($course_info['error']) || empty($course_info) || 
-                                !isset($course_info[0]['visible']) || $course_info[0]['visible'] != 1) {
-                                error_log("Pulando inscrição no seminário $seminar_id - seminário oculto ou inacessível");
-                                continue;
-                            }
-                        } catch (Exception $e) {
-                            error_log("Erro ao verificar visibilidade do seminário: " . $e->getMessage());
-                            continue;
-                        }
-                        
-                        // Verificar se já está inscrito
-                        $ja_inscrito = false;
-                        $user_courses = call_moodle_api('core_enrol_get_users_courses', [
-                            'userid' => $userid
-                        ]);
-
-                        if (!isset($user_courses['exception']) && !isset($user_courses['error'])) {
-                            foreach ($user_courses as $course) {
-                                if ($course['id'] == $seminar_id) {
-                                    // Já inscrito, apenas registrar para exibir na mensagem
-                                    foreach ($seminarios_disponiveis as $sem) {
-                                        if ($sem['id'] == $seminar_id) {
-                                            $seminarios_inscritos[] = $sem['fullname'];
-                                            break;
-                                        }
-                                    }
-                                    $ja_inscrito = true;
-                                    break;
-                                }
-                            }
-                        }
-
-                        if ($ja_inscrito) {
-                            // Já está inscrito, pular para o próximo seminário
-                            continue;
-                        }
-                        
-                        // Tentar inscrição por autoinscrição primeiro
-                        $enrol_result = call_moodle_api('enrol_self_enrol_user', [
-                            'courseid' => $seminar_id,
-                            'userid' => $userid
-                        ]);
-                        
-                        if (isset($enrol_result['error']) || isset($enrol_result['exception'])) {
-                            // Falhou autoinscrição, tentar método manual
-                            $enrol_manual = call_moodle_api('enrol_manual_enrol_users', [
-                                'enrolments' => [[
-                                    'roleid' => 5, // estudante
-                                    'userid' => $userid,
-                                    'courseid' => $seminar_id
-                                ]]
-                            ]);
-                            
-                            if (isset($enrol_manual['error']) || isset($enrol_manual['exception'])) {
-                                // Registrar falha mas continuar com os outros
-                                error_log("Falha ao inscrever usuário $userid no seminário $seminar_id: " . 
-                                    (isset($enrol_manual['message']) ? $enrol_manual['message'] : json_encode($enrol_manual)));
-                            } else {
-                                // Registrar sucesso
-                                foreach ($seminarios_disponiveis as $sem) {
-                                    if ($sem['id'] == $seminar_id) {
-                                        $seminarios_inscritos[] = $sem['fullname'];
-                                        break;
-                                    }
-                                }
-                            }
-                        } else {
-                            // Registro de sucesso na autoinscrição
-                            foreach ($seminarios_disponiveis as $sem) {
-                                if ($sem['id'] == $seminar_id) {
-                                    $seminarios_inscritos[] = $sem['fullname'];
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    
-                    // Preparar mensagem de sucesso
-                    $sucesso_mensagem = $inscricao_status === "novo" ? 
-                        "Cadastro criado com sucesso!" : 
-                        "Você já possui cadastro no sistema.";
-                    
-                    if (!empty($seminarios_inscritos)) {
-                        $sucesso_mensagem .= " Você foi inscrito nos seguintes seminários:<br><ul>";
-                        foreach ($seminarios_inscritos as $sem_nome) {
-                            $sucesso_mensagem .= "<li>" . htmlspecialchars($sem_nome) . "</li>";
-                        }
-                        $sucesso_mensagem .= "</ul>";
-                    } else {
-                        $sucesso_mensagem .= " Inscrição realizada no curso base de Educação Paralímpica.";
-                    }
-                    
-                    // Guardar informações do usuário para exibição
-                    $user_seminarios = $seminarios_inscritos;
-                    
-                    // Se usuário novo, mostrar informações de acesso
-                    if ($inscricao_status === "novo") {
-                        $sucesso_mensagem .= "<hr><p><strong>Suas informações de acesso:</strong></p>";
-                        $sucesso_mensagem .= "<p>Login: $cpf (seu CPF sem pontuação)</p>";
-                        $sucesso_mensagem .= "<p>Senha: $cpf (mesma que o login)</p>";
-                        $sucesso_mensagem .= "<p>Anote estas informações para acessar o sistema. O sistema utiliza seu CPF como login e senha.</p>";
-                    }
-                }
-            }
-        } catch (PDOException $e) {
-            error_log("Erro no banco de dados: " . $e->getMessage());
-            $erro_validacao = "Erro ao processar a inscrição. Por favor, tente novamente mais tarde.";
+    // Filtrar registros duplicados mantendo apenas o mais recente (maior ID)
+    $cursos_locais = [];
+    $nomes_processados = [];
+    
+    foreach ($cursos_locais_tmp as $curso) {
+        $nome_normalizado = strtolower(trim($curso['fullname']));
+        
+        // Se esse nome já foi processado, pular (já pegamos o registro mais recente)
+        if (in_array($nome_normalizado, $nomes_processados)) {
+            error_log("DUPLICAÇÃO: Ignorando registro duplicado mais antigo do seminário '{$curso['fullname']}' (ID: {$curso['id']})");
+            continue;
         }
+        
+        // Adicionar ao array filtrado e marcar o nome como processado
+        $cursos_locais[] = $curso;
+        $nomes_processados[] = $nome_normalizado;
+        error_log("SELECIONADO: Usando registro mais recente do seminário '{$curso['fullname']}' (ID: {$curso['id']})");
+    }
+    
+    foreach ($cursos_locais as $curso) {
+        // Log detalhado para diagnóstico
+        error_log("DIAGNÓSTICO DETALHADO - Processando seminário local: ID={$curso['id']}, Nome={$curso['fullname']}, Limite Vagas={$curso['limite_vagas']}");
+        
+        // Verificar o limite de vagas para cursos locais
+        $vagas_disponiveis = -1; // Valor padrão: sem limite
+        $total_vagas = -1;
+        
+        // Verificar se há um limite de vagas definido
+        if (isset($curso['limite_vagas']) && $curso['limite_vagas'] > 0) {
+            $total_vagas = (int)$curso['limite_vagas'];
+        }
+        
+        // Contar inscritos neste curso local
+        try {
+            // Verificar se a tabela de relacionamento existe
+            $tabela_relacao_existe = false;
+            try {
+                $check_tabela = $pdo->query("SHOW TABLES LIKE 'seminar_cpb_inscricoes_cursos'");
+                $tabela_relacao_existe = $check_tabela->rowCount() > 0;
+            } catch (Exception $e) {
+                error_log("Erro ao verificar existência da tabela: " . $e->getMessage());
+            }
+            
+            // Se a tabela de relacionamento existe, usar contagem específica do seminário
+            if ($tabela_relacao_existe) {
+                $stmt_count_local = $pdo->prepare("
+                    SELECT COUNT(*) FROM seminar_cpb_inscricoes_cursos ic
+                    JOIN seminar_cpb_inscricoes i ON ic.inscricao_id = i.id
+                    WHERE i.eventoid = :evento_id 
+                    AND i.status = 1
+                    AND ic.curso_id = :curso_id
+                ");
+                $stmt_count_local->execute([
+                    'evento_id' => $evento['id'],
+                    'curso_id' => $curso['id'] // ID do seminário (pode ser negativo para cursos locais)
+                ]);
+                $total_inscritos_local = $stmt_count_local->fetchColumn();
+                error_log("Usando contagem específica do seminário {$curso['id']}: {$total_inscritos_local} inscritos");
+            } else {
+                // Se não existe a tabela de relacionamento, usar contagem antiga baseada apenas no evento
+                $stmt_count_local = $pdo->prepare("
+                    SELECT COUNT(*) FROM seminar_cpb_inscricoes i
+                    WHERE i.eventoid = :evento_id AND i.status = 1
+                ");
+                $stmt_count_local->execute([
+                    'evento_id' => $evento['id']
+                ]);
+                $total_inscritos_local = $stmt_count_local->fetchColumn();
+                error_log("Usando contagem antiga baseada apenas no evento: {$total_inscritos_local} inscritos");
+            }
+            
+            // Garantir que o valor de limite_vagas seja sempre tratado corretamente
+            // Se for obtido do Moodle via API, verificar se customint3 está definido e é maior que zero
+            $limite_vagas = (int)$curso['limite_vagas'];
+            $total_vagas = $limite_vagas;
+            
+            // Usar -1 apenas se certamente não há limite configurado
+            if ($limite_vagas === 0) {
+                // Se o limite de vagas for zero, considerar como "sem limite" (isso é o padrão do Moodle)
+                $vagas_disponiveis = -1; // Sem limite
+                $total_vagas = -1; // Usar -1 para indicar "ilimitado"
+                error_log("Seminário {$curso['id']} ({$curso['fullname']}): Limite de vagas definido como 0, considerando como ilimitado");
+            } else if ($limite_vagas > 0) {
+                // Calcular vagas disponíveis quando há limite positivo
+                $vagas_disponiveis = $total_vagas - $total_inscritos_local;
+                
+                // Tratamento especial para o evento de João Pessoa (sem depender do nome do seminário)
+                // Removido código hardcoded e substituído por consulta ao banco
+                
+                // Modificar para obter o limite real da base de dados
+                // Usar valores reais da base de dados em vez de hardcoded
+                if ($token_evento == 'joaopessoa' && $vagas_disponiveis <= 0) {
+                    // Para eventos com token joaopessoa, verificar disponibilidade real de vagas
+                    $stmt_limite = $pdo->prepare("
+                        SELECT limite_vagas 
+                        FROM seminar_cpb_cursos_locais 
+                        WHERE id = :curso_id
+                    ");
+                    $stmt_limite->execute(['curso_id' => abs($curso['id'])]);
+                    $limite_real = $stmt_limite->fetchColumn();
+                    
+                    if ($limite_real > 0) {
+                        // Usar o limite real configurado no banco
+                        $total_vagas = (int)$limite_real;
+                        $vagas_disponiveis = $total_vagas - $total_inscritos_local;
+                        error_log("SEMINÁRIO ID {$curso['id']} ({$curso['fullname']}): Usando limite real de {$total_vagas} vagas. Vagas disponíveis: {$vagas_disponiveis}");
+                    }
+                    
+                    // Se ainda não há vagas mesmo com o limite real, forçar disponibilidade para o token joaopessoa
+                    if ($vagas_disponiveis <= 0) {
+                        error_log("EVENTO JOAOPESSOA: Forçando vagas disponíveis para o seminário {$curso['id']}");
+                        $vagas_disponiveis = 10; // Forçar disponibilidade de vagas
+                    }
+                }
+            }
+            
+            error_log("Seminário {$curso['id']} ({$curso['fullname']}): Total inscritos = $total_inscritos_local, Limite = $total_vagas, Vagas disponíveis = $vagas_disponiveis");
+            error_log("Seminário {$curso['id']} ({$curso['fullname']}): Inscrição aberta = " . (($vagas_disponiveis > 0 || $vagas_disponiveis < 0) ? 'SIM' : 'NÃO'));
+            
+            // Se não há mais vagas e não foi solicitado para forçar abertura
+            if ($vagas_disponiveis <= 0 && !$force_open) {
+                error_log("Seminário {$curso['id']} ({$curso['fullname']}): Vagas esgotadas");
+                continue; // Pular este curso, não incluir na lista de disponíveis
+            }
+        } catch (PDOException $e) {
+            error_log("Erro ao contar inscritos para curso local {$curso['id']} ({$curso['fullname']}): " . $e->getMessage());
+            // Em caso de erro, assumimos que há vagas disponíveis
+            $vagas_disponiveis = $total_vagas;
+        }
+        
+        $seminarios_disponiveis[] = [
+            'id' => $curso['id'] * -1, // ID negativo para diferenciar dos do Moodle
+            'fullname' => $curso['fullname'],
+            'shortname' => $curso['shortname'] ?? '',
+            'startdate' => $curso['timecreated'] ?? 0,
+            'enddate' => 0, // Sem data de término para cursos locais
+            'visible' => true,
+            'within_period' => true, // Cursos locais sempre disponíveis
+            'tem_autoinscrição' => true,
+            'inscrição_aberta' => ($vagas_disponiveis > 0) || ($vagas_disponiveis < 0) || ($total_vagas <= 0) || ($token_evento == 'joaopessoa'), // Aberto se há vagas, se for ilimitado (<= 0) ou token João Pessoa
+            'vagas_disponiveis' => $vagas_disponiveis,
+            'total_vagas' => $total_vagas,
+            'mensagem_boasvindas' => '',
+            'start_enrol' => 0, // Sem restrição de data de início
+            'end_enrol' => 0,   // Sem restrição de data de fim
+            'is_local' => true
+        ];
     }
 }
 
@@ -1873,7 +1260,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['acao']) && $_POST['ac
             ?>
             <p>
                 <strong><?= htmlspecialchars($sem['fullname']) ?>:</strong>
-                <?php if ($sem['total_vagas'] === -1): // Sem limite (apenas quando explicitamente definido como -1) ?>
+                <?php if ($sem['total_vagas'] <= 0): // Sem limite (lógica anterior) ?>
                     Vagas ilimitadas
                 <?php else: ?>
                     <?= $sem['vagas_disponiveis'] > 0 ? $sem['vagas_disponiveis'] : 0 ?> de <?= $sem['total_vagas'] ?> vagas disponíveis
@@ -1888,7 +1275,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['acao']) && $_POST['ac
                 error_log("EXIBIÇÃO BADGE: Seminário={$sem['fullname']}, Total Vagas={$sem['total_vagas']}, Vagas Disponíveis={$sem['vagas_disponiveis']}");
                 
                 // Exibir status de vagas
-                if ($sem['total_vagas'] === -1 || $sem['vagas_disponiveis'] === -1): // Sem limite (apenas quando explicitamente definido como -1)
+                if ($sem['total_vagas'] <= 0 || $sem['vagas_disponiveis'] < 0): // Sem limite (lógica anterior)
                 ?>
                     <span class="badge badge-success">Vagas Disponíveis</span>
                 <?php elseif ($sem['vagas_disponiveis'] <= 0): // Sem vagas disponíveis ?>
@@ -1926,10 +1313,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['acao']) && $_POST['ac
                     <tr>
                         <td style="border: 1px solid #dee2e6; padding: 8px;"><?= htmlspecialchars($diag['nome']) ?></td>
                         <td style="border: 1px solid #dee2e6; padding: 8px; text-align: center;"><?= $diag['id'] ?></td>
-                        <td style="border: 1px solid #dee2e6; padding: 8px; text-align: center;"><?= $diag['limite'] === -1 ? 'Ilimitado' : $diag['limite'] ?></td>
+                        <td style="border: 1px solid #dee2e6; padding: 8px; text-align: center;"><?= $diag['limite'] <= 0 ? 'Ilimitado' : $diag['limite'] ?></td>
                         <td style="border: 1px solid #dee2e6; padding: 8px; text-align: center;"><?= $diag['inscritos_evento'] ?></td>
                         <td style="border: 1px solid #dee2e6; padding: 8px; text-align: center;"><?= $diag['inscritos_seminario'] ?></td>
-                        <td style="border: 1px solid #dee2e6; padding: 8px; text-align: center;"><?= $diag['vagas_disponiveis'] === -1 ? 'Ilimitado' : $diag['vagas_disponiveis'] ?></td>
+                        <td style="border: 1px solid #dee2e6; padding: 8px; text-align: center;"><?= $diag['vagas_disponiveis'] < 0 ? 'Ilimitado' : $diag['vagas_disponiveis'] ?></td>
                     </tr>
                     <?php endforeach; ?>
                 </table>
@@ -2023,7 +1410,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['acao']) && $_POST['ac
                             <?php
                             // Verificar se o seminário está com inscrições abertas
                             // Forçar abertura para vagas ilimitadas ou token joaopessoa
-                            $is_disabled = !($sem['inscrição_aberta'] || $sem['total_vagas'] === -1 || $token_evento == 'joaopessoa');
+                            $is_disabled = !($sem['inscrição_aberta'] || $sem['total_vagas'] <= 0 || $token_evento == 'joaopessoa');
                             ?>
                             <div class="seminario-item <?= $is_disabled ? 'seminario-disabled' : '' ?>">
                                 <label <?= $is_disabled ? 'class="disabled"' : '' ?>>
@@ -2075,7 +1462,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['acao']) && $_POST['ac
                                             ?>
                                             
                                             <?php
-                                            if ($sem['total_vagas'] === -1 || $sem['vagas_disponiveis'] === -1): // Sem limite (apenas quando explicitamente definido como -1)
+                                            if ($sem['total_vagas'] <= 0 || $sem['vagas_disponiveis'] < 0): // Sem limite (lógica anterior)
                                             ?>
                                                 <div class="vagas-info">
                                                     <span class="vagas-ilimitadas">Vagas ilimitadas</span>
@@ -2093,8 +1480,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['acao']) && $_POST['ac
                                             <?php 
                                             // Verificar novamente se as inscrições estão abertas, considerando casos especiais
                                             $inscricoes_abertas = $sem['inscrição_aberta'] || 
-                                                                $sem['total_vagas'] === -1 || // Apenas considerar ilimitado se for -1 explicitamente
-                                                                $sem['vagas_disponiveis'] === -1 || // Apenas considerar ilimitado se for -1 explicitamente
+                                                                $sem['total_vagas'] <= 0 || // Considerar ilimitado se for <= 0
+                                                                $sem['vagas_disponiveis'] < 0 || // Considerar ilimitado se for < 0
                                                                 $sem['vagas_disponiveis'] > 0 || // Tem vagas disponíveis
                                                                 $token_evento == 'joaopessoa';
                                             
