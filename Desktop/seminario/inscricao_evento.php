@@ -264,6 +264,40 @@ $category_id = 19;
 $seminarios = [];
 $seminarios_disponiveis = []; // Array para armazenar seminários com informações completas
 
+// Inicializar variáveis para evitar erros de variável indefinida
+$erro_validacao = '';
+$sucesso_mensagem = '';
+$mensagem_boasvindas = '';
+$estados = [
+    'AC' => 'Acre',
+    'AL' => 'Alagoas',
+    'AP' => 'Amapá',
+    'AM' => 'Amazonas',
+    'BA' => 'Bahia',
+    'CE' => 'Ceará',
+    'DF' => 'Distrito Federal',
+    'ES' => 'Espírito Santo',
+    'GO' => 'Goiás',
+    'MA' => 'Maranhão',
+    'MT' => 'Mato Grosso',
+    'MS' => 'Mato Grosso do Sul',
+    'MG' => 'Minas Gerais',
+    'PA' => 'Pará',
+    'PB' => 'Paraíba',
+    'PR' => 'Paraná',
+    'PE' => 'Pernambuco',
+    'PI' => 'Piauí',
+    'RJ' => 'Rio de Janeiro',
+    'RN' => 'Rio Grande do Norte',
+    'RS' => 'Rio Grande do Sul',
+    'RO' => 'Rondônia',
+    'RR' => 'Roraima',
+    'SC' => 'Santa Catarina',
+    'SP' => 'São Paulo',
+    'SE' => 'Sergipe',
+    'TO' => 'Tocantins'
+];
+
 // Buscar todos os seminários associados a este evento
 try {
     // Log de depuração para verificar consulta
