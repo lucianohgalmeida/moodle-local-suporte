@@ -1,0 +1,22 @@
+.card {
+  border-radius: 1rem;
+  box-shadow: 0 2px 12px rgba(0,0,0,0.07);
+  transition: box-shadow 0.2s;
+}
+.card:hover {
+  box-shadow: 0 4px 24px rgba(0,0,0,0.13);
+}
+.card-title a {
+  color: #1a237e;
+  text-decoration: none;
+}
+.card-title a:hover {
+  text-decoration: underline;
+}
+.btn-success {
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+#course-search {
+  box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+} 
